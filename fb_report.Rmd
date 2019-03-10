@@ -1,0 +1,318 @@
+---
+title: "Report on Facebook"
+output:
+  html_document:
+    theme: united
+    toc: yes
+  pdf_document:
+    toc: yes
+  word_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning=FALSE)
+```
+
+# Approach 
+
+* I extracted data from Closeup Official FB page of Vietnam https://www.facebook.com/closeupvn.page/ via Facebook API. In this analysis, I'm trying to see if there is any improvement in user engagement via FB throughout the time. I also want to see what types of posts are appealing to users and what are the trend in users' reaction, etc. 
+
+* I have to say there are a lot of limitation in this analysis: time, admin authorization to the FB page, information on advertising/marketing campaigns... 
+
+```{r set-up, include=FALSE}
+library(devtools)
+# install_github("Rfacebook", "pablobarbera", subdir="Rfacebook")
+library(Rfacebook)
+library(textcat)
+setwd("/Users/mainguyen/Analytics/social_listening")
+```
+
+```{r oauth, include=FALSE}
+#fb_oauth <- fbOAuth(app_id="430821193965904",
+#                    app_secret="ef6f7ea23e299721ee86c9e450f05b82",extended_permissions = TRUE)
+#save(fb_oauth, file="fb_oauth")
+load("fb_oauth")
+```
+
+```{r get-data, include=FALSE}
+# closeup <- getPage("closeupvn.page", token=fb_oauth, n = 5000)
+# save(closeup, file="closeup.Rdata")
+load("closeup.Rdata")
+```
+
+```{r clean-data, include=FALSE}
+library(zoo)
+closeup$created_time1 <- gsub("T", " ", closeup$created_time)
+closeup$date_created <- as.Date(as.POSIXct(closeup$created_time1), format="%Y-%m")
+closeup$monyear <- as.yearmon(closeup$date_created)
+```
+
+
+# Social analysis
+
+## Performance - how is the page doing from the last 5 years? 
+
+### Posts throughout the time
+
+From the data, we can see that the page has less and less interaction with the Internet, due to reduce in the number of post. However, thanks to an improvement in FB advertising platform, each post (with ads) is more likely to reach more people. 
+
+```{r mani-perf, include=FALSE}
+library(dplyr)
+time_perf <- closeup %>%
+  group_by(monyear) %>%
+  summarise(n_post=length(unique(id)),
+            n_like=sum(likes_count),
+            n_comment=sum(comments_count),
+            n_share=sum(shares_count))
+```
+
+```{r plot-perf, results='asis'}
+library(highcharter)
+
+hc_time_perf <- highchart() %>% 
+  hc_yAxis_multiples(create_yaxis(naxis = 4)) %>%
+  hc_xAxis(categories = factor(time_perf$monyear)) %>% 
+  hc_add_series(name = "number of posts", data = time_perf$n_post, type="column", yAxis = 0) %>%
+  hc_add_series(name = "number of likes", data = time_perf$n_like, type="line", yAxis = 1) %>%
+  hc_add_series(name = "number of comments", data = time_perf$n_comment, type="line", yAxis = 2) %>%
+  hc_add_series(name = "number of shares", data = time_perf$n_share, type="line", yAxis = 3)
+  
+hc_time_perf
+```
+
+### Most popular types of post
+
+More than 80% of the posts are photo. However, it looks like people are more willing to share when it comes to content with video, as the number of shares for video is twice as many as that of photo. It could be attributed to a richer and more informative content that a video post can provide. 
+
+```{r pop-typ, echo=FALSE, results='asis'}
+library(DT)
+type_post <- closeup %>%
+  group_by(type) %>%
+  summarise(n_post=length(unique(id)),
+            n_like=sum(likes_count),
+            n_comment=sum(comments_count),
+            n_share=sum(shares_count)) %>%
+  arrange(desc(n_like)) %>%
+  datatable()
+
+type_post
+```
+
+### Most viral posts so far
+
+Regardless of the marketing campaign behind these posts, one common characteristics that makes these posts more appealing to users could be their action-oriented message. These post all go with either an event, a concert or a campaign that call users to particular actions. 
+
+```{r}
+viral <- closeup %>%
+  arrange(desc(likes_count)) %>%
+  select(date_created, type, message, likes_count, comments_count, shares_count, link) %>%
+  head(n=10) %>%
+  datatable()
+
+viral
+```
+
+## What people think about the posts? 
+
+### Who are the people that like the page? 
+
+* It's always important to know who are your loyal customers. Same for facebook page. By knowing who usually like the page, we will likely get a few things, such as: what groups of demographic are likely interested in the content? what types of posts? or why some people follow us for a long period of time but they stop afterwards? 
+
+```{r user, results='asis', echo=FALSE}
+# getPostLike <- function(num) {
+#   post <- getPost(closeup$id[num], token=fb_oauth, n = 1000, likes = TRUE, comments = TRUE)
+#   like <- post$likes
+#   df_like <- as.data.frame(like)
+#   write.csv(df_like, file=paste0("/Users/mainguyen/Analytics/social_listening/fb_data_like/","post_",num,".csv"), row.names=FALSE)
+# }
+# 
+# for (i in 1:length(closeup$id)) {
+#   getPostLike(i)
+# }
+
+file_path <- "/Users/mainguyen/Analytics/social_listening/fb_data_like/"
+list <- as.list(list.files(file_path, pattern =".csv"))
+list_file <- lapply(list, function(x) paste0(file_path, x))
+library(plyr)
+library(data.table)
+list_all <- plyr::llply(list_file, fread, header = TRUE) 
+all_like <- do.call(
+  rbind.fill,
+  list_all
+)
+write.csv(all_like, "all_like.csv", row.names = FALSE)
+
+#active_user <- length(unique(all_like$from_id))
+
+detach(package:plyr)
+library(dplyr)
+
+top_user <- all_like %>%
+  group_by(from_name) %>%
+  summarise(n_like=n()) %>%
+  count(n_like) %>%
+  mutate(sum=sum(n)) %>%
+  mutate(perct=round(n/sum*100, digits=2)) %>%
+  select(-n, -sum) %>%
+  arrange(desc(perct)) %>%
+  head(n=10) %>%
+  datatable()
+top_user
+```
+
+* We should also follow the people with the highest number of likes. Maybe, afterwards, we can approach these users to conduct a survey to know why they are interested in the posts. On the other hand, we can do the same thing with the group that shows a lower level of engagement, to improve the content. 
+
+```{r most-like, results='asis', echo=FALSE}
+list_most_like <- all_like %>%
+  group_by(from_name) %>%
+  summarise(n_like=n()) %>%
+  arrange(desc(n_like)) %>%
+  filter(from_name!="Closeup") %>%
+  head(n=10) %>%
+  datatable()
+list_most_like
+```
+
+
+```{r get-data-wc, eval=FALSE, echo=FALSE}
+getPostComment <- function(num) {
+  post <- getPost(closeup$id[num], token=fb_oauth, n = 1000)
+  comment <- post$comments
+  df_comment <- as.data.frame(comment)
+  write.csv(df_comment, file=paste0("/Users/mainguyen/Analytics/social_listening/fb_data_comment/","post_",num,".csv"), row.names=FALSE)
+}
+
+for (i in 1:length(closeup$id)) {
+  getPostComment(i)
+}
+
+file_path2 <- "/Users/mainguyen/Analytics/social_listening/fb_data_comment/"
+list2 <- as.list(list.files(file_path2, pattern =".csv"))
+list_file2 <- lapply(list2, function(x) paste0(file_path2, x))
+library(plyr)
+list_all2 <- plyr::llply(list_file2, fread, header = TRUE) 
+all_comment <- do.call(
+  rbind.fill,
+  list_all2
+)
+write.csv(all_comment, "all_comment.csv", row.names = FALSE)
+
+#active_user <- length(unique(all_like$from_id))
+
+detach(package:plyr)
+```
+
+
+```{r word-cloud, echo=FALSE, eval=FALSE}
+library(tm)
+
+all_comment <- read.csv("all_comment.csv", header=TRUE)
+
+all.comment.text <- paste(all_comment$message)
+all.comment.text <- sapply(all.comment.text, function(row) iconv(row, to="ASCII//TRANSLIT"))
+
+# Remove punctuation
+all.comment.text <- gsub("[[:punct:]]", "", all.comment.text)
+# Convert all text to lower case
+all.comment.text <- tolower(all.comment.text)
+# Replace blank space (“rt”)
+all.comment.text <- gsub("rt", "", all.comment.text)
+# Replace @UserName
+all.comment.text <- gsub("@\\w+", "", all.comment.text)
+# Remove links
+all.comment.text <- gsub("http\\w+", "", all.comment.text)
+# Remove tabs
+all.comment.text <- gsub("[ |\t]{2,}", "", all.comment.text)
+# Remove blank spaces at the beginning
+all.comment.text <- gsub("^ ", "", all.comment.text)
+# Remove blank spaces at the end
+all.comment.text <- gsub(" $", "", all.comment.text)
+# Create corpus
+comment.text.corpus <- Corpus(VectorSource(all.comment.text))
+# Clean up by removing stop words
+comment.text.corpus <- tm_map(comment.text.corpus, function(x) removeWords(x,c("bạn", "mình", "nhé", "ạ")))
+
+library(wordcloud)
+wc2 <- wordcloud(comment.text.corpus, min.freq = 2, scale=c(7,0.5),colors=brewer.pal(8, "Dark2"),  random.color= TRUE, random.order = FALSE, max.words = 150)
+wc2
+```
+
+```{r freq, eval=FALSE, echo=FALSE}
+tdm2 <- TermDocumentMatrix(comment.text.corpus,
+                      control = list(wordLengths = c(1, Inf)))
+term.freq2 <- rowSums(as.matrix(tdm2))
+
+term.freq2 <- subset(term.freq2, term.freq2 >= 15)
+term_df <- data.frame(term = names(term.freq2), freq = term.freq2)
+top_freq2 <- term_df %>%
+  arrange(desc(freq)) %>%
+  head(n=20) %>%
+  datatable()
+top_freq2
+```
+
+
+```{r api-sentiment, eval=FALSE, echo=FALSE}
+getSentiment <- function(x) {
+api_url <- "https://api.repustate.com"
+api_path <- "/v3/a7d0d6d4b603ea3b3df87ac9011507b2fa464c12/score.json"
+response <- POST(api_url, path=api_path, body=x)
+json_response <- content(response, as="text", type="application/json", encoding="UTF-8")
+json_list <- fromJSON(json_response)
+return(json_list$score)
+}
+
+all_comment$message <- as.character(all_comment$message)
+all_comment$sentiment_score <- sapply(all_comment$message, function(x) getSentiment(x))
+
+```
+
+### Are there anyone giving angry and sad reactions? 
+
+* Although all of the posts are meant to provoke positive feeling from subscribers, some of them unintentionally do the other way round to some subscribers, making them sad or "angry" or at least from negative feeling, like jealousy. We need to investigate such cases. 
+
+* From the analysis, we can see that top posts that have the most number of angry counts are from a campaign in which customers can get a set of free towers when they buy Closeup. This could be a sign that customers might have had some bad experience while participating in the promotion. Therefore, further investigation should be conducted in terms of online shopping, delivery, quality of the products, etc. 
+
+```{r angry, echo=FALSE, results='asis'}
+#reaction <- getReactions(post=closeup$id, token=fb_oauth)
+#save(reaction, file="reaction.Rdata")
+load("reaction.Rdata")
+closeup_react <- left_join(closeup, reaction, by="id")
+closeup_react <- closeup_react %>%
+  select(date_created, message, sad_count, angry_count, link) %>%
+  arrange(desc(angry_count)) %>%
+  head(n=10) %>%
+  datatable()
+closeup_react
+```
+
+
+## What are other pages that carry the image of Closeup? 
+
+* It's important to know if someone is using Closeup brand with bad faith. For this purpose, I scrap all the pages or groups in Vietnam that have topics related to "Closeup". 
+
+* What I found out is there aren't any Vietnamese FB groups related to Closeup, while there are 23 FB pages with the names and description related to Closeup. Most of these pages were created for the purpose of marketing a particular event, such as "FA Escape", and do not seem to be active as the number of people "talking about" is all 0. 
+
+```{r search-group, echo=FALSE, results='asis'}
+search_group <- searchGroup("closeup", token=fb_oauth, n = 1000)
+search_page <- searchPages("closeup", token=fb_oauth, n = 1000)
+
+search_group$detect <- textcat(search_group$name)
+vn_group <- filter(search_group, detect=="vietnamese")
+
+#install from archive
+url <- "http://cran.us.r-project.org/src/contrib/Archive/cldr/cldr_1.1.0.tar.gz"
+pkgFile<-"cldr_1.1.0.tar.gz"
+download.file(url = url, destfile = pkgFile)
+install.packages(pkgs=pkgFile, type="source", repos=NULL)
+unlink(pkgFile)
+# or if you have devtools installed:
+# devtools::install_version("cldr",version="1.1.0")
+
+vn_page <- filter(search_page, country=='Vietnam') %>%
+  select(category, name, link) %>%
+  datatable()
+vn_page
+```
+
